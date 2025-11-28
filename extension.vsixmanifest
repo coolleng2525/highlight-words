@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
+  <Metadata>
+    <Identity Language="en-US" Id="highlight-words" Version="0.2.0" Publisher="rsbondi"/>
+    <DisplayName>highlight-words</DisplayName>
+    <Description xml:space="preserve">Highlight all occurrences of words or expressions with cross-file navigation</Description>
+    <Tags>highlight,search,word,navigation</Tags>
+    <Categories>Other</Categories>
+    <GalleryFlags>Public</GalleryFlags>
+    <License>extension/LICENSE.md</License>
+    <Icon>extension/images/highlight.png</Icon>
+  </Metadata>
+  <Installation>
+    <InstallationTarget Id="Microsoft.VisualStudio.Code"/>
+  </Installation>
+  <Dependencies/>
+  <Assets>
+    <Asset Type="Microsoft.VisualStudio.Code.Manifest" Path="extension/package.json"/>
+  </Assets>
+</PackageManifest>

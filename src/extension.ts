@@ -1,7 +1,8 @@
 'use strict';
-import { commands, ExtensionContext, window, workspace, Position, Selection, Range } from 'vscode';
+import { commands, ExtensionContext, window, workspace, Position, Selection, Range, ViewColumn } from 'vscode';
 import HighlightConfig from './config'
 import Highlight from './highlight'
+import { LocationMatch } from './highlight'
 
 export function activate(context: ExtensionContext) {
     let highlight = new Highlight()
@@ -61,78 +62,141 @@ export function activate(context: ExtensionContext) {
         })
     })
     
-    function next(e, wrap?:boolean) {
-        const doc = window.activeTextEditor.document
-        const ed = window.activeTextEditor
-        const offset = wrap ? 0 : doc.offsetAt(ed.selection.active)
-        const nextStart = wrap ? 0 : 1
-        const text = doc.getText()
-        const slice = text.slice(offset+nextStart)
-        const opts = e.highlight.ignoreCase ? 'i' : ''
-        const expression = e.highlight.wholeWord ? '\\b' + e.highlight.expression + '\\b' : e.highlight.expression
-
-        const re = new RegExp(expression, opts)
-        const pos = slice.search(re)
-        if(pos == -1) { 
-            if(!wrap) { next(e, true) } // wrap
-            else highlight.getLocationIndex(e.highlight.expression, new Range(new Position(1,1), new Position(1,1)))
+    async function next(e, wrap?:boolean) {
+        const expression = e.highlight.expression
+        const allLocations = highlight.getAllLocations()
+        const locations = allLocations.get(expression)
+        
+        if (!locations || locations.length === 0) {
+            window.showInformationMessage('No matches found')
             return
         }
-        const word = slice.match(re)
-        const start = doc.positionAt(pos+offset+nextStart)
-        const end = new Position(start.line, start.character+word[0].length)
-        const range = new Range(start, end)
-        window.activeTextEditor.revealRange(range)
-        window.activeTextEditor.selection = new Selection(start, start)
-        highlight.getLocationIndex(e.highlight.expression, range)
+        
+        // Sort locations by file and then by position
+        const sortedLocations = locations.sort((a, b) => {
+            const pathCompare = a.uri.fsPath.localeCompare(b.uri.fsPath)
+            if (pathCompare !== 0) return pathCompare
+            if (a.range.start.line !== b.range.start.line) {
+                return a.range.start.line - b.range.start.line
+            }
+            return a.range.start.character - b.range.start.character
+        })
+        
+        // Find current position
+        let currentIndex = -1
+        if (window.activeTextEditor) {
+            const currentUri = window.activeTextEditor.document.uri.fsPath
+            const currentPos = window.activeTextEditor.selection.active
+            
+            currentIndex = sortedLocations.findIndex(loc => 
+                loc.uri.fsPath === currentUri &&
+                loc.range.start.line === currentPos.line &&
+                loc.range.start.character >= currentPos.character - 1
+            )
+            
+            // If not found or we're past this position, try to find the next one
+            if (currentIndex === -1 || 
+                (sortedLocations[currentIndex] && 
+                 sortedLocations[currentIndex].range.start.character < currentPos.character)) {
+                currentIndex = sortedLocations.findIndex(loc => 
+                    loc.uri.fsPath === currentUri && 
+                    loc.range.start.isAfter(currentPos)
+                )
+            }
+        }
+        
+        // Move to next location
+        const nextIndex = currentIndex === -1 || currentIndex >= sortedLocations.length - 1 ? 0 : currentIndex + 1
+        const nextLocation = sortedLocations[nextIndex]
+        
+        try {
+            const document = await workspace.openTextDocument(nextLocation.uri)
+            const editor = await window.showTextDocument(document)
+            editor.selection = new Selection(nextLocation.range.start, nextLocation.range.start)
+            editor.revealRange(nextLocation.range, 1)
+            highlight.getLocationIndex(expression, nextLocation.range)
+        } catch (error) {
+            window.showErrorMessage(`Failed to navigate: ${error.message}`)
+        }
     }
 
     commands.registerCommand('highlightwords.findNext', e => {
         next(e)
     });
 
-    function prev(e, wrap?:boolean) {
-        const doc = window.activeTextEditor.document
-        const ed = window.activeTextEditor
-        const iAmHere = ed.selection.active
-        const offset = doc.offsetAt(iAmHere)
-        const text = doc.getText()
-        const slice = text.slice(0, offset)
-        const opts = e.highlight.ignoreCase ? 'gi' : 'g'
-        const expression = e.highlight.wholeWord ? '\\b' + e.highlight.expression + '\\b' : e.highlight.expression
-
-        const re = new RegExp(expression, opts)
-        const pos = slice.search(re)
-        if(pos == -1) { 
-            if(!wrap) {
-                if(offset !=0) {
-                    const home = doc.positionAt(text.length-1)
-                    window.activeTextEditor.selection = new Selection(home, home)
-                    prev(e, true)
-                    return
+    async function prev(e, wrap?:boolean) {
+        const expression = e.highlight.expression
+        const allLocations = highlight.getAllLocations()
+        const locations = allLocations.get(expression)
+        
+        if (!locations || locations.length === 0) {
+            window.showInformationMessage('No matches found')
+            return
+        }
+        
+        // Sort locations by file and then by position
+        const sortedLocations = locations.sort((a, b) => {
+            const pathCompare = a.uri.fsPath.localeCompare(b.uri.fsPath)
+            if (pathCompare !== 0) return pathCompare
+            if (a.range.start.line !== b.range.start.line) {
+                return a.range.start.line - b.range.start.line
+            }
+            return a.range.start.character - b.range.start.character
+        })
+        
+        // Find current position
+        let currentIndex = -1
+        if (window.activeTextEditor) {
+            const currentUri = window.activeTextEditor.document.uri.fsPath
+            const currentPos = window.activeTextEditor.selection.active
+            
+            // Find the last location before current position
+            for (let i = sortedLocations.length - 1; i >= 0; i--) {
+                const loc = sortedLocations[i]
+                if (loc.uri.fsPath === currentUri && loc.range.start.isBefore(currentPos)) {
+                    currentIndex = i
+                    break
+                } else if (loc.uri.fsPath < currentUri) {
+                    currentIndex = i
+                    break
                 }
-            } else highlight.getLocationIndex(e.highlight.expression, new Range(new Position(1,1), new Position(1,1)))
-        } 
-        let word 
-        let found
-        let index
-
-        while ((found = re.exec(slice)) !== null) {
-            index = re.lastIndex
-            word = found[0]
-            console.log('last index', index)
-          }
-
-
-        const start = doc.positionAt(index - word.length)
-        const range = new Range(start, start)
-        window.activeTextEditor.revealRange(range)
-        window.activeTextEditor.selection = new Selection(start, start)
-        highlight.getLocationIndex(e.highlight.expression, range)
+            }
+        }
+        
+        // Move to previous location
+        const prevIndex = currentIndex === -1 || currentIndex <= 0 ? sortedLocations.length - 1 : currentIndex - 1
+        const prevLocation = sortedLocations[prevIndex]
+        
+        try {
+            const document = await workspace.openTextDocument(prevLocation.uri)
+            const editor = await window.showTextDocument(document)
+            editor.selection = new Selection(prevLocation.range.start, prevLocation.range.start)
+            editor.revealRange(prevLocation.range, 1)
+            highlight.getLocationIndex(expression, prevLocation.range)
+        } catch (error) {
+            window.showErrorMessage(`Failed to navigate: ${error.message}`)
+        }
     }
 
     commands.registerCommand('highlightwords.findPrevious', e => {
         prev(e)        
+    });
+
+    commands.registerCommand('highlightwords.goToLocation', async (location: LocationMatch) => {
+        if (!location || !location.uri || !location.range) return;
+        
+        try {
+            // Open the document
+            const document = await workspace.openTextDocument(location.uri);
+            const editor = await window.showTextDocument(document, ViewColumn.Active);
+            
+            // Navigate to the location
+            const position = location.range.start;
+            editor.selection = new Selection(position, position);
+            editor.revealRange(location.range, 1); // 1 = vscode.TextEditorRevealType.InCenter
+        } catch (error) {
+            window.showErrorMessage(`Failed to open location: ${error.message}`);
+        }
     });
 
     updateConfig()

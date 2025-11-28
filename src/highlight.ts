@@ -1,5 +1,5 @@
 'use strict';
-import { window, TextEditorDecorationType, Range, QuickPickItem} from 'vscode';
+import { window, TextEditorDecorationType, Range, QuickPickItem, Uri} from 'vscode';
 import HighlightTreeProvider from './tree'
 
 export interface Highlightable {
@@ -11,6 +11,11 @@ export interface Highlightable {
 export interface SearchLocation {
     index: number
     count: number
+}
+
+export interface LocationMatch {
+    uri: Uri
+    range: Range
 }
 
 enum Modes {
@@ -28,12 +33,14 @@ class Highlight {
     private mode: number
     private treeProvider: HighlightTreeProvider
     private ranges: {}
+    private allLocations: Map<string, LocationMatch[]>
 
     constructor() {
         this.words = []
         this.decorators = []
         this.treeProvider = new HighlightTreeProvider(this.getWords());
         this.ranges = {}
+        this.allLocations = new Map()
         window.registerTreeDataProvider('hilightWordsExplore', this.treeProvider);
     }
 
@@ -41,6 +48,7 @@ class Highlight {
     public getMode() { return this.mode }
     public getWords() { return this.words }
     public setDecorators(d) { this.decorators = d }
+    public getAllLocations() { return this.allLocations }
 
     public getLocationIndex(expression: string, range: Range) {
         this.treeProvider.currentExpression = expression
@@ -56,6 +64,9 @@ class Highlight {
     }
 
     public updateDecorations(active?) {
+        // Clear all locations at the start
+        this.allLocations.clear()
+        
         window.visibleTextEditors.forEach(editor => {
             if (active && editor.document != window.activeTextEditor.document) return;
             const text = editor.document.getText();
@@ -70,22 +81,35 @@ class Highlight {
                 const expression = w.wholeWord ? '\\b' + w.expression + '\\b' : w.expression
                 const regEx = new RegExp(expression, opts);
                 this.ranges[w.expression] = []
+                
+                // Initialize location array if not exists
+                if (!this.allLocations.has(w.expression)) {
+                    this.allLocations.set(w.expression, [])
+                }
+                
                 while (match = regEx.exec(text)) {
                     const startPos = editor.document.positionAt(match.index);
                     const endPos = editor.document.positionAt(match.index + match[0].length);
                     const decoration = { range: new Range(startPos, endPos) };
                     decs[n % decs.length].push(decoration);
                     this.ranges[w.expression].push(decoration.range)
+                    
+                    // Store location with file URI
+                    this.allLocations.get(w.expression).push({
+                        uri: editor.document.uri,
+                        range: decoration.range
+                    })
                 }
             });
             this.decorators.forEach(function (d, i) {
                 editor.setDecorations(d, decs[i]);
             });
-            this.treeProvider.words = this.words
-            this.treeProvider.refresh()
-
         })
-
+        
+        // Update tree provider with locations
+        this.treeProvider.words = this.words
+        this.treeProvider.locations = this.allLocations
+        this.treeProvider.refresh()
     }
 
     public clearAll() {
